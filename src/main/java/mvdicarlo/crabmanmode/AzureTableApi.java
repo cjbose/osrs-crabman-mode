@@ -1,6 +1,7 @@
 package mvdicarlo.crabmanmode;
 
 import java.lang.reflect.Type;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -8,6 +9,7 @@ import java.util.stream.Collectors;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 
+import okhttp3.HttpUrl;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -35,6 +37,45 @@ public class AzureTableApi {
         return baseUrl + path + "?" + existingParams + (queryParams.isEmpty() ? "" : "&" + queryParams);
     }
 
+    private List<UnlockedItemEntity> sendPagedRequest(Request initialRequest) throws Exception {
+        StringBuilder fullResponseBody = new StringBuilder();
+        String nextPartitionKey = null;
+        String nextRowKey = null;
+        List<UnlockedItemEntity> unlockedItemEntities = new ArrayList<>();
+        
+        HttpUrl baseUrl = initialRequest.url();
+    
+        do {
+            HttpUrl.Builder urlBuilder = baseUrl.newBuilder();
+    
+            if (nextPartitionKey != null && nextRowKey != null) {
+                urlBuilder.addQueryParameter("NextPartitionKey", nextPartitionKey);
+                urlBuilder.addQueryParameter("NextRowKey", nextRowKey);
+            }
+    
+            Request requestWithPaging = initialRequest.newBuilder()
+                    .url(urlBuilder.build())
+                    .build();
+    
+            try (Response response = httpClient.newCall(requestWithPaging).execute()) {
+                if (!response.isSuccessful()) {
+                    throw new Exception("Request failed: " + response.body().string());
+                }
+    
+                // Append this page of results
+                unlockedItemEntities.addAll(parseJsonListResponse(response.body().string()));
+    
+                // Get continuation tokens
+                nextPartitionKey = response.header("x-ms-continuation-NextPartitionKey");
+                nextRowKey = response.header("x-ms-continuation-NextRowKey");
+    
+            }
+        } while (nextPartitionKey != null && nextRowKey != null);
+    
+        return unlockedItemEntities;
+    }
+
+    
     private String sendRequest(Request request) throws Exception {
         try (Response response = httpClient.newCall(request).execute()) {
             if (response.isSuccessful()) {
@@ -75,8 +116,7 @@ public class AzureTableApi {
         Request request = createRequestBuilder(url)
                 .get()
                 .build();
-        String jsonResponse = sendRequest(request);
-        return parseJsonListResponse(jsonResponse);
+        return sendPagedRequest(request);
     }
 
     public List<UnlockedItemEntity> listEntities() throws Exception {
@@ -84,8 +124,7 @@ public class AzureTableApi {
         Request request = createRequestBuilder(url)
                 .get()
                 .build();
-        String jsonResponse = sendRequest(request);
-        return parseJsonListResponse(jsonResponse);
+        return sendPagedRequest(request);
     }
 
     public void deleteEntity(String partitionKey, String rowKey) throws Exception {
